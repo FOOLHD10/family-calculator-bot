@@ -19,9 +19,7 @@ WIFE_SHARE = 164 / 500     # 0.328 (32.8%)
 
 # Получаем токен из переменной окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "https://your-app.railway.app")
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+PORT = int(os.getenv("PORT", 8080))
 
 # Создаём бота и диспетчер
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -66,8 +64,7 @@ async def cmd_start(message: Message):
         "📝 Как пользоваться:\n"
         "• Общая сумма: <code>/total 1000</code>\n"
         "• Ты заплатил: <code>/me 500</code>\n"
-        "• Жена заплатила: <code>/wife 300</code>\n\n"
-        "💡 Пример: если ввели <code>/total 1000</code>, я скажу сколько кому платить."
+        "• Жена заплатила: <code>/wife 300</code>"
     )
     await message.answer(text, parse_mode="HTML")
 
@@ -145,7 +142,11 @@ async def echo(message: Message):
 
 # Webhook handler
 async def on_startup(bot: Bot):
-    await bot.set_webhook(WEBHOOK_URL)
+    # Получаем домен автоматически из переменной Railway
+    domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", f"https://your-app.up.railway.app")
+    webhook_url = f"{domain}/webhook"
+    await bot.set_webhook(webhook_url)
+    logging.info(f"Webhook установлен на: {webhook_url}")
 
 async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
@@ -156,12 +157,12 @@ async def main():
     
     app = web.Application()
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
+    webhook_requests_handler.register(app, path="/webhook")
     setup_application(app, dp, bot=bot)
     
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    site = web.TCPSite(runner, host="0.0.0.0", port=PORT)
     await site.start()
     
     await asyncio.Event().wait()
