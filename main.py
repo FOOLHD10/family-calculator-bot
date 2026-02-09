@@ -1,7 +1,7 @@
 import os
 import logging
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import CommandStart
 from aiogram.types import Message, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
@@ -77,8 +77,7 @@ def calculate(amount, mode):
 
 # Обработчик команды /start и кнопки Старт
 @dp.message(CommandStart())
-@dp.message(F.text == "Старт")
-@dp.message(F.text == "Новый расчёт")
+@dp.message(F.text.in_({"Старт", "Новый расчёт"}))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
@@ -112,37 +111,3 @@ async def process_type(message: Message, state: FSMContext):
     await state.set_state(CalcState.waiting_for_amount)
     
     # Формируем подсказку в зависимости от выбора
-    hints = {
-        "total": "Введите общую сумму покупки:",
-        "husband": "Введите сумму, которую заплатил муж:",
-        "wife": "Введите сумму, которую заплатила жена:"
-    }
-    await message.answer(hints[calc_type], reply_markup=ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Отмена")]],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    ))
-
-# Обработчик отмены
-@dp.message(F.text == "Отмена")
-async def cancel(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("❌ Расчёт отменён", reply_markup=get_start_keyboard())
-
-# Обработчик ввода суммы
-@dp.message(CalcState.waiting_for_amount)
-async def process_amount(message: Message, state: FSMContext):
-    try:
-        amount = float(message.text.replace(',', '.').strip())
-        if amount <= 0:
-            await message.answer("❌ Сумма должна быть больше нуля!\nПопробуйте ещё раз:")
-            return
-        
-        data = await state.get_data()
-        calc_type = data.get("calc_type", "total")
-        
-        # Рассчитываем
-        result = calculate(amount, calc_type)
-        
-        # Формируем красивый ответ
-        response =
