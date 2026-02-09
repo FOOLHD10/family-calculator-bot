@@ -14,14 +14,16 @@ logging.basicConfig(level=logging.INFO)
 HUSBAND_SHARE = 336 / 500  # 0.672 (67.2%)
 WIFE_SHARE = 164 / 500     # 0.328 (32.8%)
 
-# Получаем токен из переменной окружения
+# Получаем токен и список разрешённых пользователей
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ALLOWED_USERS = os.getenv("ALLOWED_USERS", "")
+ALLOWED_USER_IDS = set(int(uid.strip()) for uid in ALLOWED_USERS.split(",") if uid.strip())
 
 # Создаём бота и диспетчер
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# Хранилище для отслеживания состояния пользователей (упрощённое)
+# Хранилище для отслеживания состояния пользователей
 user_state = {}
 
 # Кнопки
@@ -67,12 +69,44 @@ def calculate(amount, mode):
         husband = total - amount
         return {"husband": husband, "wife": amount, "total": total}
 
-# Старт
+# Проверка доступа
+def is_user_allowed(user_id: int) -> bool:
+    # Если список разрешённых пустой — разрешаем всем (для теста)
+    if not ALLOWED_USER_IDS:
+        return True
+    return user_id in ALLOWED_USER_IDS
+
+# Обработчик всех сообщений — сначала проверяем доступ
+@dp.message()
+async def access_control(message: Message):
+    user_id = message.from_user.id
+    username = message.from_user.username or "без_имени"
+    
+    # Логируем попытку доступа (только для разрешённых пользователей!)
+    if is_user_allowed(user_id):
+        logging.info(f"✅ Доступ разрешён: user_id={user_id}, username=@{username}")
+        # Передаём сообщение дальше — в другие обработчики
+        await dp.feed_update(bot, message)
+    else:
+        logging.warning(f"❌ Доступ запрещён: user_id={user_id}, username=@{username}")
+        # Отправляем сообщение о запрете
+        await message.answer(
+            "🔒 Доступ к этому боту ограничен.\n"
+            "Обратитесь к владельцу бота для получения доступа."
+        )
+
+# Старт (вызывается только для разрешённых пользователей)
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
+    if not is_user_allowed(message.from_user.id):
+        return
+    
     user_state[message.from_user.id] = None
     await message.answer(
         "👋 Привет! Я помогу рассчитать семейные расходы.\n\n"
+        "Ваши пропорции:\n"
+        "• Муж — 67.2% (336 ₽ из 500)\n"
+        "• Жена — 32.8% (164 ₽ из 500)\n\n"
         "👇 Нажми кнопку, чтобы начать:",
         reply_markup=get_start_keyboard()
     )
@@ -80,6 +114,9 @@ async def cmd_start(message: Message):
 # Кнопка Старт / Новый расчёт
 @dp.message(F.text.in_({"Старт", "Новый расчёт"}))
 async def start_calculation(message: Message):
+    if not is_user_allowed(message.from_user.id):
+        return
+    
     user_state[message.from_user.id] = "choosing_type"
     await message.answer(
         "❓ Кто платит?",
@@ -89,6 +126,9 @@ async def start_calculation(message: Message):
 # Выбор типа платежа
 @dp.message(F.text.in_({"Общая сумма", "Муж платит", "Жена платит"}))
 async def process_type(message: Message):
+    if not is_user_allowed(message.from_user.id):
+        return
+    
     type_map = {
         "Общая сумма": "total",
         "Муж платит": "husband",
@@ -108,6 +148,9 @@ async def process_type(message: Message):
 # Ввод суммы
 @dp.message()
 async def process_amount(message: Message):
+    if not is_user_allowed(message.from_user.id):
+        return
+    
     user_id = message.from_user.id
     
     # Если пользователь ещё не выбрал тип — игнорируем
@@ -136,14 +179,12 @@ async def process_amount(message: Message):
         calc_type = user_state[user_id]["type"]
         result = calculate(amount, calc_type)
         
-        # КРИТИЧЕСКИ ВАЖНО: ЭТА СТРОКА ДОЛЖНА БЫТЬ В ОДНУ СТРОКУ!
         response = f"✅ Расчёт готов:\n\n💰 Общая сумма: <b>{result['total']} ₽</b>\n👨 Муж: <b>{result['husband']} ₽</b>\n👩 Жена: <b>{result['wife']} ₽</b>"
         
         await message.answer(response, reply_markup=get_restart_keyboard())
         user_state[user_id] = None
         
     except (ValueError, AttributeError):
-        # Проверяем, не нажал ли пользователь "Новый расчёт" или другую команду
         if message.text in ["Новый расчёт", "Старт"]:
             user_state[user_id] = "choosing_type"
             await message.answer("❓ Кто платит?", reply_markup=get_type_keyboard())
@@ -152,7 +193,8 @@ async def process_amount(message: Message):
 
 # Основная функция
 async def main():
-    logging.info("✅ Бот запускается...")
+    logging.info(f"✅ Бот запускается...")
+    logging.info(f"✅ Разрешённые пользователи: {ALLOWED_USER_IDS if ALLOWED_USER_IDS else 'ВСЕ (тестовый режим)'}")
     await bot.delete_webhook(drop_pending_updates=True)
     logging.info("✅ Запускаем long polling...")
     await dp.start_polling(bot)
