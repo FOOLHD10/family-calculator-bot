@@ -3,9 +3,6 @@ import logging
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, KeyboardButton, ReplyKeyboardMarkup
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 import asyncio
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -20,17 +17,14 @@ WIFE_SHARE = 164 / 500     # 0.328 (32.8%)
 # Получаем токен из переменной окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Создаём бота и диспетчер с хранилищем состояний
-storage = MemoryStorage()
+# Создаём бота и диспетчер
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher(storage=storage)
+dp = Dispatcher()
 
-# Состояния для конечного автомата
-class CalcState(StatesGroup):
-    waiting_for_type = State()  # Ожидаем выбор: общая/муж/жена
-    waiting_for_amount = State()  # Ожидаем ввод суммы
+# Хранилище для отслеживания состояния пользователей (упрощённое)
+user_state = {}
 
-# Главное меню с кнопкой Старт
+# Кнопки
 def get_start_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="Старт")]],
@@ -38,7 +32,6 @@ def get_start_keyboard():
         one_time_keyboard=True
     )
 
-# Кнопки выбора типа платежа
 def get_type_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -50,7 +43,6 @@ def get_type_keyboard():
         one_time_keyboard=True
     )
 
-# Кнопки для нового расчёта
 def get_restart_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="Новый расчёт")]],
@@ -75,11 +67,10 @@ def calculate(amount, mode):
         husband = total - amount
         return {"husband": husband, "wife": amount, "total": total}
 
-# Обработчик команды /start и кнопки Старт
+# Старт
 @dp.message(CommandStart())
-@dp.message(F.text.in_({"Старт", "Новый расчёт"}))
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
+async def cmd_start(message: Message):
+    user_state[message.from_user.id] = None
     await message.answer(
         "👋 Привет! Я помогу рассчитать семейные расходы.\n\n"
         "Ваши пропорции:\n"
@@ -89,25 +80,85 @@ async def cmd_start(message: Message, state: FSMContext):
         reply_markup=get_start_keyboard()
     )
 
-# Обработчик нажатия на кнопку Старт (после приветствия)
-@dp.message(F.text == "Старт")
-async def start_calculation(message: Message, state: FSMContext):
-    await state.set_state(CalcState.waiting_for_type)
+# Кнопка Старт / Новый расчёт
+@dp.message(F.text.in_({"Старт", "Новый расчёт"}))
+async def start_calculation(message: Message):
+    user_state[message.from_user.id] = "choosing_type"
     await message.answer(
         "❓ Кто платит?",
         reply_markup=get_type_keyboard()
     )
 
-# Обработчик выбора типа платежа
-@dp.message(CalcState.waiting_for_type, F.text.in_({"Общая сумма", "Муж платит", "Жена платит"}))
-async def process_type(message: Message, state: FSMContext):
+# Выбор типа платежа
+@dp.message(F.text.in_({"Общая сумма", "Муж платит", "Жена платит"}))
+async def process_type(message: Message):
     type_map = {
         "Общая сумма": "total",
         "Муж платит": "husband",
         "Жена платит": "wife"
     }
-    calc_type = type_map[message.text]
-    await state.update_data(calc_type=calc_type)
-    await state.set_state(CalcState.waiting_for_amount)
+    user_state[message.from_user.id] = {
+        "type": type_map[message.text]
+    }
     
-    # Формируем подсказку в зависимости от выбора
+    hints = {
+        "total": "Введите общую сумму покупки:",
+        "husband": "Введите сумму, которую заплатил муж:",
+        "wife": "Введите сумму, которую заплатила жена:"
+    }
+    await message.answer(hints[type_map[message.text]], reply_markup=get_restart_keyboard())
+
+# Ввод суммы
+@dp.message()
+async def process_amount(message: Message):
+    user_id = message.from_user.id
+    
+    # Если пользователь ещё не выбрал тип — игнорируем
+    if user_id not in user_state or user_state[user_id] is None:
+        await message.answer(
+            "👇 Нажмите кнопку «Старт», чтобы начать расчёт:",
+            reply_markup=get_start_keyboard()
+        )
+        return
+    
+    # Если ожидаем выбор типа
+    if user_state[user_id] == "choosing_type":
+        await message.answer(
+            "❓ Сначала выберите, кто платит:",
+            reply_markup=get_type_keyboard()
+        )
+        return
+    
+    # Обрабатываем сумму
+    try:
+        amount = float(message.text.replace(',', '.').strip())
+        if amount <= 0:
+            await message.answer("❌ Сумма должна быть больше нуля!\nПопробуйте ещё раз:")
+            return
+        
+        calc_type = user_state[user_id]["type"]
+        result = calculate(amount, calc_type)
+        
+        # КРИТИЧЕСКИ ВАЖНО: ЭТА СТРОКА ДОЛЖНА БЫТЬ В ОДНУ СТРОКУ!
+        response = f"✅ Расчёт готов:\n\n💰 Общая сумма: <b>{result['total']} ₽</b>\n👨 Муж: <b>{result['husband']} ₽</b>\n👩 Жена: <b>{result['wife']} ₽</b>"
+        
+        await message.answer(response, reply_markup=get_restart_keyboard())
+        user_state[user_id] = None
+        
+    except (ValueError, AttributeError):
+        # Проверяем, не нажал ли пользователь "Новый расчёт" или другую команду
+        if message.text in ["Новый расчёт", "Старт"]:
+            user_state[user_id] = "choosing_type"
+            await message.answer("❓ Кто платит?", reply_markup=get_type_keyboard())
+        else:
+            await message.answer("❌ Неверный формат суммы!\nВведите число (например: 1000 или 500.50):")
+
+# Основная функция
+async def main():
+    logging.info("✅ Бот запускается...")
+    await bot.delete_webhook(drop_pending_updates=True)
+    logging.info("✅ Запускаем long polling...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
