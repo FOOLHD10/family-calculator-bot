@@ -69,7 +69,7 @@ def calculate(amount, mode):
         husband = total - amount
         return {"husband": husband, "wife": amount, "total": total}
 
-# Проверка доступа (ИСПРАВЛЕНО!)
+# Проверка доступа
 def is_user_allowed(user_id: int) -> bool:
     # Если список разрешённых пустой — разрешаем всем (для теста)
     if not ALLOWED_USER_IDS:
@@ -101,7 +101,7 @@ async def cmd_start(message: Message):
     if not is_user_allowed(message.from_user.id):
         return
     
-    user_state[message.from_user.id] = None
+    user_state[message.from_user.id] = "start"
     await message.answer(
         "👋 Привет! Я помогу рассчитать семейные расходы.\n\n"
         "Ваши пропорции:\n"
@@ -182,7 +182,7 @@ async def process_amount(message: Message):
         response = f"✅ Расчёт готов:\n\n💰 Общая сумма: <b>{result['total']} ₽</b>\n👨 Муж: <b>{result['husband']} ₽</b>\n👩 Жена: <b>{result['wife']} ₽</b>"
         
         await message.answer(response, reply_markup=get_restart_keyboard())
-        user_state[user_id] = None
+        user_state[user_id] = "start"  # Возвращаем в стартовое состояние
         
     except (ValueError, AttributeError):
         if message.text in ["Новый расчёт", "Старт"]:
